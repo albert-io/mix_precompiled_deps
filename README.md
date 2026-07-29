@@ -77,8 +77,10 @@ it is never loaded, only resolved.
 
 ## Requirements
 
-Three small Mix patches, until they are upstreamed
-([albert-io/elixir@precompiled-deps](https://github.com/albert-io/elixir)):
+Three small Mix patches, until they are upstreamed — shipped in
+[`patches/`](patches/) (against Elixir v1.20.2) and as the
+[albert-io/elixir@precompiled-deps](https://github.com/albert-io/elixir/tree/precompiled-deps)
+branch:
 
 1. `Mix.Dep.load_paths/1` trusts a dependency's `:build` path instead of
    reconstructing `<build_lib>/<app>/ebin`

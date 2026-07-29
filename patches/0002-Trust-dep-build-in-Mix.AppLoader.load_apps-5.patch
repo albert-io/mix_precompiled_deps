@@ -1,0 +1,78 @@
+From 52c7f712f0ac8eba4ab96f0ce65faed1799d03aa Mon Sep 17 00:00:00 2001
+From: Alec Hartung <alec@albert.io>
+Date: Wed, 29 Jul 2026 15:16:30 -0500
+Subject: [PATCH 2/3] Trust dep :build in Mix.AppLoader.load_apps/5
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Same assumption as Mix.Dep.load_paths/1: the app loader reconstructed
+each dependency's ebin as <build_lib>/<app>/ebin. Carry the dependency's
+own opts[:build] through the traversal instead — identical output for
+all built-in SCMs.
+---
+ lib/mix/lib/mix/app_loader.ex | 22 +++++++++++++---------
+ 1 file changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/lib/mix/lib/mix/app_loader.ex b/lib/mix/lib/mix/app_loader.ex
+index c354305..a286367 100644
+--- a/lib/mix/lib/mix/app_loader.ex
++++ b/lib/mix/lib/mix/app_loader.ex
+@@ -94,12 +94,16 @@ def load_app(app, app_path) do
+   Loads the given applications.
+   """
+   def load_apps(apps, deps, config, acc, fun) do
+-    lib_path = to_charlist(Path.join(Mix.Project.build_path(config), "lib"))
+-    deps_children = for dep <- deps, into: %{}, do: {dep.app, Enum.map(dep.deps, & &1.app)}
++    deps_children =
++      for dep <- deps, into: %{} do
++        ebin_path = to_charlist(Path.join(dep.opts[:build], "ebin"))
++        {dep.app, {ebin_path, Enum.map(dep.deps, & &1.app)}}
++      end
++
+     builtin_paths = Mix.State.builtin_apps()
+ 
+     (extra_apps(config) ++ apps)
+-    |> traverse_apps(%{}, deps_children, builtin_paths, lib_path)
++    |> traverse_apps(%{}, deps_children, builtin_paths)
+     |> Enum.reduce(acc, fun)
+   end
+ 
+@@ -111,16 +115,16 @@ defp extra_apps(config) do
+   end
+ 
+   # We already processed this app, skip it.
+-  defp traverse_apps([app | apps], seen, deps_children, builtin_paths, lib_path)
++  defp traverse_apps([app | apps], seen, deps_children, builtin_paths)
+        when is_map_key(seen, app) do
+-    traverse_apps(apps, seen, deps_children, builtin_paths, lib_path)
++    traverse_apps(apps, seen, deps_children, builtin_paths)
+   end
+ 
+   # We haven't processed this app, emit it.
+-  defp traverse_apps([app | apps], seen, deps_children, builtin_paths, lib_path) do
++  defp traverse_apps([app | apps], seen, deps_children, builtin_paths) do
+     {ebin_path, dep_children} =
+       case deps_children do
+-        %{^app => dep_children} -> {app_join(lib_path, app, ~c"/ebin"), dep_children}
++        %{^app => {ebin_path, dep_children}} -> {ebin_path, dep_children}
+         _ -> {builtin_paths[app], []}
+       end
+ 
+@@ -140,11 +144,11 @@ defp traverse_apps([app | apps], seen, deps_children, builtin_paths, lib_path) d
+     children = (dep_children -- app_children) ++ app_children
+     seen = Map.put(seen, app, true)
+     apps = children ++ apps
+-    [{app, ebin_path} | traverse_apps(apps, seen, deps_children, builtin_paths, lib_path)]
++    [{app, ebin_path} | traverse_apps(apps, seen, deps_children, builtin_paths)]
+   end
+ 
+   # We have processed all apps.
+-  defp traverse_apps([], seen, _deps_children, builtin_paths, _lib_path) do
++  defp traverse_apps([], seen, _deps_children, builtin_paths) do
+     # We want to keep erts in the load path but it doesn't require to be loaded.
+     case builtin_paths do
+       %{erts: path} when not is_map_key(seen, :erts) -> [{:erts, path}]
+-- 
+2.54.0
+

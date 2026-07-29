@@ -1,0 +1,37 @@
+From 9eec6d56d50e5fc45bcd1b83844d8f2b88f4dea8 Mon Sep 17 00:00:00 2001
+From: Alec Hartung <alec@albert.io>
+Date: Wed, 29 Jul 2026 15:16:30 -0500
+Subject: [PATCH 1/3] Trust dep :build in Mix.Dep.load_paths/1
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+load_paths/1 reconstructed the ebin path as <dirname(build)>/<app>/ebin,
+assuming every dependency's build directory lives directly under the
+project's build lib dir. Use opts[:build] itself instead — identical
+output for all built-in SCMs (where build is always <build_lib>/<app>),
+but it allows SCMs to place compiled dependencies elsewhere, e.g. an
+external build system providing immutable precompiled applications.
+---
+ lib/mix/lib/mix/dep.ex | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/lib/mix/lib/mix/dep.ex b/lib/mix/lib/mix/dep.ex
+index 151c7ef..07825f8 100644
+--- a/lib/mix/lib/mix/dep.ex
++++ b/lib/mix/lib/mix/dep.ex
+@@ -511,9 +511,8 @@ def format_dep(%Mix.Dep{scm: scm, app: app, status: status, opts: opts}) do
+ 
+   Automatically derived from source paths.
+   """
+-  def load_paths(%Mix.Dep{app: app, opts: opts}) do
+-    build_path = Path.dirname(opts[:build])
+-    [Path.join([build_path, Atom.to_string(app), "ebin"])]
++  def load_paths(%Mix.Dep{opts: opts}) do
++    [Path.join(opts[:build], "ebin")]
+   end
+ 
+   @doc """
+-- 
+2.54.0
+

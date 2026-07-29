@@ -1,0 +1,81 @@
+From a673db08eb0a02e9155c1726028d9e907f20b713 Mon Sep 17 00:00:00 2001
+From: Alec Hartung <alec@albert.io>
+Date: Wed, 29 Jul 2026 15:16:30 -0500
+Subject: [PATCH 3/3] Support a :precompiled option on dependencies
+
+An SCM may put precompiled: true in a dependency's opts (from
+accepts_options/2) to declare it prebuilt and immutable, e.g. provided
+by an external build system such as Nix or Bazel:
+
+  * it is exempt from the rule that non-fetchable dependencies are
+    always considered for recompilation
+  * mix deps.compile skips it when it is ok, and raises an actionable
+    error when it is stale or explicitly forced, instead of deleting
+    and rebuilding its (read-only) build directory
+---
+ lib/mix/lib/mix/tasks/deps.compile.ex   | 24 ++++++++++++++++++++++++
+ lib/mix/lib/mix/tasks/deps.loadpaths.ex |  5 +++--
+ 2 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/lib/mix/lib/mix/tasks/deps.compile.ex b/lib/mix/lib/mix/tasks/deps.compile.ex
+index 2b621ee..0556fea 100644
+--- a/lib/mix/lib/mix/tasks/deps.compile.ex
++++ b/lib/mix/lib/mix/tasks/deps.compile.ex
+@@ -100,6 +100,22 @@ def compile(deps, options \\ []) do
+       |> reject_umbrella_children(options)
+       |> reject_local_deps(options)
+ 
++    {precompiled, deps} = Enum.split_with(deps, & &1.opts[:precompiled])
++
++    case Enum.filter(precompiled, &(force? or not Mix.Dep.ok?(&1))) do
++      [] ->
++        :ok
++
++      stale ->
++        Mix.raise("""
++        cannot compile dependencies: #{Enum.map_join(stale, ", ", &inspect(&1.app))}
++
++        These dependencies are precompiled and immutable. If they are out of \
++        date, rebuild them with the external build system that provided them \
++        and regenerate their manifest\
++        """)
++    end
++
+     count = System.get_env("MIX_OS_DEPS_COMPILE_PARTITION_COUNT", "0") |> String.to_integer()
+ 
+     # If all dependencies are local and ok, do not bother starting
+@@ -123,6 +139,14 @@ def compile_single(%Mix.Dep{} = dep, force?, config) do
+     %{app: app, status: status, opts: opts, scm: scm} = dep
+     check_unavailable!(app, scm, status)
+ 
++    if opts[:precompiled] do
++      Mix.raise(
++        "cannot compile dependency #{inspect(app)} because it is precompiled " <>
++          "and immutable. If it is out of date, rebuild it with the external " <>
++          "build system that provided it and regenerate its manifest"
++      )
++    end
++
+     # If a dependency was marked as fetched or with an out of date lock
+     # or missing the app file, we always compile it from scratch.
+     if force? or clean_before_compile?(dep) do
+diff --git a/lib/mix/lib/mix/tasks/deps.loadpaths.ex b/lib/mix/lib/mix/tasks/deps.loadpaths.ex
+index f53396f..bc968a1 100644
+--- a/lib/mix/lib/mix/tasks/deps.loadpaths.ex
++++ b/lib/mix/lib/mix/tasks/deps.loadpaths.ex
+@@ -178,9 +178,10 @@ defp reload_deps(deps) do
+   end
+ 
+   # Every local dependency (i.e. that are not fetchable)
+-  # are automatically recompiled if they are ok.
++  # are automatically recompiled if they are ok. Precompiled
++  # dependencies are immutable and never recompiled.
+   defp local?(dep) do
+-    not dep.scm.fetchable?()
++    not dep.scm.fetchable?() and !dep.opts[:precompiled]
+   end
+ 
+   defp show_not_ok!([]) do
+-- 
+2.54.0
+
