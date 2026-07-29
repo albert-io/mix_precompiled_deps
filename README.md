@@ -21,43 +21,64 @@ friends run against store-resident dependencies natively:
 
 ## Usage
 
-Point `MIX_PRECOMPILED_DEPS` at a manifest file and register the SCM at the
-top of `mix.exs`:
+Point `MIX_PRECOMPILED_DEPS` at a manifest file and install the project hook
+after `use Mix.Project`:
 
 ```elixir
-if Code.ensure_loaded?(MixPrecompiledDeps) do
-  MixPrecompiledDeps.register()
+defmodule MyApp.MixProject do
+  use Mix.Project
+
+  if Code.ensure_loaded?(MixPrecompiledDeps) do
+    use MixPrecompiledDeps
+  end
 end
 ```
 
-Registration is a no-op when the environment variable is unset, so normal
-Mix workflows (`mix deps.get`, `mix deps.update`, Hex) are untouched. The
-package itself is expected to be provided by the external build system
-(e.g. on `ERL_LIBS` from a Nix devShell or build sandbox) rather than
-declared as a dependency — it must be loadable before the dependency tree
-is resolved.
+The hook runs after Mix selects the task's preferred environment. Registration
+is a no-op when the environment variable is unset, so normal Mix workflows
+(`mix deps.get`, `mix deps.update`, Hex) are untouched.
+
+For a persistent local opt-in, pass a directory containing
+`deps-manifest-<env>.exs` files:
+
+```elixir
+use MixPrecompiledDeps, manifest_dir: ".external-build"
+```
+
+The explicit environment variable takes precedence. A missing directory or
+environment manifest is a no-op; a broken directory symlink raises instead of
+silently falling back to regular dependencies.
+
+The package itself is expected to be provided by the external build system
+(e.g. on `ERL_LIBS` from a Nix devShell or build sandbox) rather than declared
+as a dependency — it must be loadable before the dependency tree is resolved.
 
 ## The manifest
 
-An `.exs` file evaluating to a map of dependency names to entries:
+An `.exs` file evaluating to lock metadata and a map of dependency entries:
 
 ```elixir
 %{
-  "ecto" => %{
-    dest: "/nix/store/...-ecto-3.13.5/src",
-    build: "/nix/store/...-ecto-3.13.5/lib/erlang/lib/ecto-3.13.5",
-    version: "3.13.5"
+  lock: %{sha256: "..."},
+  deps: %{
+    "ecto" => %{
+      dest: "/nix/store/...-ecto-3.13.5/src",
+      build: "/nix/store/...-ecto-3.13.5/lib/erlang/lib/ecto-3.13.5",
+      version: "3.13.5"
+    }
   },
-  ...
 }
 ```
 
+- `lock.sha256` — optional lowercase SHA-256 of the complete project lockfile;
+  a mismatch fails before the SCM is registered
 - `dest` — the dependency's source tree: used for dependency resolution
   (its `mix.exs`/`rebar.config`), `import_deps` in `.formatter.exs`, etc.
 - `build` — its compiled BEAM application directory (containing `ebin/`)
-- `version` — optional; compared against the project's `mix.lock` entry so
-  a manifest generated from an older lock reports as outdated instead of
-  being silently used
+- `version` — optional per-dependency fallback check for manifests without a
+  complete lock digest
+
+The original flat dependency map remains accepted for compatibility.
 
 Both paths are treated as immutable: Mix never compiles, cleans, fetches,
 or writes to them. When a dependency is reported out of date, rebuild it

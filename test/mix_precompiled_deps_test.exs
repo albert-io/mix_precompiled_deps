@@ -30,6 +30,7 @@ defmodule MixPrecompiledDepsTest do
     on_exit(fn ->
       System.delete_env("MIX_PRECOMPILED_DEPS")
       Manifest.reload()
+      Mix.SCM.delete(SCM)
     end)
 
     %{manifest_path: manifest_path, build: build, dest: dest}
@@ -55,8 +56,6 @@ defmodule MixPrecompiledDepsTest do
       assert MixPrecompiledDeps.enabled?()
       assert MixPrecompiledDeps.register() == :ok
       assert [MixPrecompiledDeps.SCM | _] = Mix.SCM.available()
-    after
-      Mix.SCM.delete(MixPrecompiledDeps.SCM)
     end
 
     test "raises on a manifest that is not a map", %{tmp_dir: tmp_dir} do
@@ -75,6 +74,192 @@ defmodule MixPrecompiledDepsTest do
       assert_raise Mix.Error, ~r/could not load/, fn ->
         MixPrecompiledDeps.enabled?()
       end
+    end
+
+    test "loads the structured manifest format", %{
+      tmp_dir: tmp_dir,
+      build: build,
+      dest: dest
+    } do
+      path = Path.join(tmp_dir, "structured.exs")
+
+      File.write!(path, """
+      %{
+        lock: %{sha256: #{"0" |> String.duplicate(64) |> inspect()}},
+        deps: %{
+          "ecto" => %{dest: #{inspect(dest)}, build: #{inspect(build)}, version: "3.13.5"}
+        }
+      }
+      """)
+
+      enable!(path)
+
+      assert Manifest.get() == %{
+               deps: %{
+                 "ecto" => %{dest: dest, build: build, version: "3.13.5"}
+               },
+               lock_sha256: String.duplicate("0", 64)
+             }
+    end
+
+    test "raises on malformed dependency entries", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "bad-entry.exs")
+      File.write!(path, "%{deps: %{\"ecto\" => %{dest: 123}}}")
+      enable!(path)
+
+      assert_raise Mix.Error, ~r/to have string dest and build paths/, fn ->
+        MixPrecompiledDeps.enabled?()
+      end
+    end
+
+    test "raises on a malformed lock digest", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "bad-lock.exs")
+      File.write!(path, "%{lock: %{sha256: \"nope\"}, deps: %{}}")
+      enable!(path)
+
+      assert_raise Mix.Error, ~r/lowercase SHA-256 digest/, fn ->
+        MixPrecompiledDeps.enabled?()
+      end
+    end
+  end
+
+  describe "project registration" do
+    setup %{tmp_dir: tmp_dir, build: build, dest: dest} do
+      original_env = Mix.env()
+      Mix.env(:test)
+      System.delete_env("MIX_PRECOMPILED_DEPS")
+      Manifest.reload()
+
+      lockfile = Path.join(tmp_dir, "mix.lock")
+      File.write!(lockfile, "%{}")
+
+      digest =
+        lockfile
+        |> File.read!()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      manifest_dir = Path.join(tmp_dir, "bundle")
+      File.mkdir_p!(manifest_dir)
+
+      File.write!(Path.join(manifest_dir, "deps-manifest-test.exs"), """
+      %{
+        lock: %{sha256: #{inspect(digest)}},
+        deps: %{
+          "ecto" => %{dest: #{inspect(dest)}, build: #{inspect(build)}, version: "3.13.5"}
+        }
+      }
+      """)
+
+      on_exit(fn -> Mix.env(original_env) end)
+
+      %{manifest_dir: manifest_dir, lockfile: lockfile}
+    end
+
+    test "discovers the preferred environment manifest and validates the lock", %{
+      tmp_dir: tmp_dir,
+      manifest_dir: manifest_dir,
+      lockfile: lockfile
+    } do
+      assert MixPrecompiledDeps.register(
+               manifest_dir: manifest_dir,
+               project_dir: tmp_dir,
+               lockfile: Path.basename(lockfile)
+             ) == :ok
+
+      assert System.get_env("MIX_PRECOMPILED_DEPS") ==
+               Path.join(manifest_dir, "deps-manifest-test.exs")
+    end
+
+    test "raises when the complete lock digest differs", %{
+      tmp_dir: tmp_dir,
+      manifest_dir: manifest_dir,
+      lockfile: lockfile
+    } do
+      File.write!(lockfile, "%{changed: true}")
+
+      assert_raise Mix.Error, ~r/built from a different mix.lock/, fn ->
+        MixPrecompiledDeps.register(
+          manifest_dir: manifest_dir,
+          project_dir: tmp_dir,
+          lockfile: Path.basename(lockfile)
+        )
+      end
+    end
+
+    test "is a no-op when the selected environment has no manifest", %{
+      tmp_dir: tmp_dir,
+      manifest_dir: manifest_dir
+    } do
+      Mix.env(:dev)
+
+      assert MixPrecompiledDeps.register(
+               manifest_dir: manifest_dir,
+               project_dir: tmp_dir
+             ) == :noop
+    end
+
+    test "raises when the manifest directory pointer is broken", %{tmp_dir: tmp_dir} do
+      manifest_dir = Path.join(tmp_dir, "broken")
+      File.ln_s!(Path.join(tmp_dir, "missing"), manifest_dir)
+
+      assert_raise File.Error, ~r/could not stat/, fn ->
+        MixPrecompiledDeps.register(
+          manifest_dir: manifest_dir,
+          project_dir: tmp_dir
+        )
+      end
+    end
+
+    test "the project hook runs after Mix selects its preferred environment", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "mix.lock"), "%{}")
+      File.mkdir_p!(Path.join(tmp_dir, "bundle"))
+
+      digest =
+        tmp_dir
+        |> Path.join("mix.lock")
+        |> File.read!()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      File.write!(
+        Path.join(tmp_dir, "bundle/deps-manifest-test.exs"),
+        "%{lock: %{sha256: #{inspect(digest)}}, deps: %{}}"
+      )
+
+      File.write!(Path.join(tmp_dir, "bundle/deps-manifest-dev.exs"), "[:wrong, :environment]")
+
+      File.write!(Path.join(tmp_dir, "mix.exs"), """
+      defmodule HookTest.MixProject do
+        use Mix.Project
+
+        if Code.ensure_loaded?(MixPrecompiledDeps) do
+          use MixPrecompiledDeps, manifest_dir: "bundle"
+        end
+
+        def project do
+          [app: :hook_test, version: "0.1.0", deps: []]
+        end
+
+        def cli do
+          [preferred_envs: [format: :test]]
+        end
+      end
+      """)
+
+      test_lib = Path.expand("../_build/test/lib", __DIR__)
+
+      erl_libs =
+        [test_lib, System.get_env("ERL_LIBS")]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(":")
+
+      assert {_, 0} =
+               System.cmd("mix", ["format", "--check-formatted", "mix.exs"],
+                 cd: tmp_dir,
+                 env: [{"ERL_LIBS", erl_libs}],
+                 stderr_to_stdout: true
+               )
     end
   end
 

@@ -1,6 +1,7 @@
 /_build/
 /deps/
 /doc/
+/tmp/
 erl_crash.dump
 *.ez
 mix_precompiled_deps-*.tar

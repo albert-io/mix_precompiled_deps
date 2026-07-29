@@ -38,7 +38,7 @@ defmodule MixPrecompiledDeps.SCM do
   @impl true
   def accepts_options(app, opts) do
     cond do
-      entry = Manifest.get()[Atom.to_string(app)] ->
+      entry = Manifest.get().deps[Atom.to_string(app)] ->
         opts
         |> Keyword.put(:dest, entry.dest)
         |> Keyword.put(:build, entry.build)
