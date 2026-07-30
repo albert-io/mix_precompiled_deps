@@ -234,7 +234,7 @@ defmodule MixPrecompiledDepsTest do
         use Mix.Project
 
         if Code.ensure_loaded?(MixPrecompiledDeps) do
-          use MixPrecompiledDeps, manifest_dir: "bundle"
+          MixPrecompiledDeps.install(__MODULE__, manifest_dir: "bundle")
         end
 
         def project do
@@ -258,6 +258,29 @@ defmodule MixPrecompiledDepsTest do
                System.cmd("mix", ["format", "--check-formatted", "mix.exs"],
                  cd: tmp_dir,
                  env: [{"ERL_LIBS", erl_libs}],
+                 stderr_to_stdout: true
+               )
+    end
+
+    test "the availability guard compiles without the package", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "mix.exs"), """
+      defmodule OptionalHookTest.MixProject do
+        use Mix.Project
+
+        if Code.ensure_loaded?(MixPrecompiledDeps) do
+          MixPrecompiledDeps.install(__MODULE__)
+        end
+
+        def project do
+          [app: :optional_hook_test, version: "0.1.0", deps: []]
+        end
+      end
+      """)
+
+      assert {_, 0} =
+               System.cmd("mix", ["help"],
+                 cd: tmp_dir,
+                 env: [{"ERL_LIBS", ""}],
                  stderr_to_stdout: true
                )
     end

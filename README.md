@@ -29,7 +29,7 @@ defmodule MyApp.MixProject do
   use Mix.Project
 
   if Code.ensure_loaded?(MixPrecompiledDeps) do
-    use MixPrecompiledDeps
+    MixPrecompiledDeps.install(__MODULE__)
   end
 end
 ```
@@ -42,7 +42,7 @@ For a persistent local opt-in, pass a directory containing
 `deps-manifest-<env>.exs` files:
 
 ```elixir
-use MixPrecompiledDeps, manifest_dir: ".external-build"
+MixPrecompiledDeps.install(__MODULE__, manifest_dir: ".external-build")
 ```
 
 The explicit environment variable takes precedence. A missing directory or

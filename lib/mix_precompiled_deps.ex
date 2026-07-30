@@ -15,7 +15,7 @@ defmodule MixPrecompiledDeps do
         use Mix.Project
 
         if Code.ensure_loaded?(MixPrecompiledDeps) do
-          use MixPrecompiledDeps
+          MixPrecompiledDeps.install(__MODULE__)
         end
       end
 
@@ -27,7 +27,7 @@ defmodule MixPrecompiledDeps do
   For a local opt-in directory containing environment-specific manifests,
   pass `:manifest_dir`:
 
-      use MixPrecompiledDeps, manifest_dir: ".external-build"
+      MixPrecompiledDeps.install(__MODULE__, manifest_dir: ".external-build")
 
   The hook looks for `deps-manifest-#{Mix.env()}.exs` in that directory when
   `MIX_PRECOMPILED_DEPS` is unset. A missing directory or environment
@@ -82,18 +82,12 @@ defmodule MixPrecompiledDeps do
       `deps-manifest-<env>.exs` files
 
   """
-  defmacro __using__(opts) do
-    quote do
-      Module.register_attribute(__MODULE__, :mix_precompiled_deps, persist: true)
-
-      Module.put_attribute(
-        __MODULE__,
-        :mix_precompiled_deps,
-        unquote(Macro.escape(opts))
-      )
-
-      @after_compile MixPrecompiledDeps
-    end
+  @spec install(module, keyword) :: :ok
+  def install(project, opts \\ []) when is_atom(project) and is_list(opts) do
+    Module.register_attribute(project, :mix_precompiled_deps, persist: true)
+    Module.put_attribute(project, :mix_precompiled_deps, opts)
+    Module.put_attribute(project, :after_compile, __MODULE__)
+    :ok
   end
 
   @doc false
